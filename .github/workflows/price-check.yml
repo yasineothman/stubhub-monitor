@@ -1,0 +1,33 @@
+name: StubHub Price Check
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # Every 5 minutes
+  workflow_dispatch:        # Allow manual trigger
+
+jobs:
+  check-price:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ hashFiles('requirements.txt') }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium --with-deps
+
+      - name: Check ticket prices
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          PRICE_THRESHOLD: ${{ secrets.PRICE_THRESHOLD }}
+        run: python stubhub_monitor.py --once
