@@ -381,7 +381,7 @@ def send_notification(price):
         return False
 
 
-# ── Single Check (for GitHub Actions / --once mode) ──────────────────────────
+# ── Single Check (--once mode) ────────────────────────────────────────────────
 
 
 def check_once():
@@ -409,6 +409,75 @@ def check_once():
             sys.exit(1)
     else:
         log.info("No alert — price £%.2f is above £%.2f threshold", price, PRICE_THRESHOLD)
+
+
+# ── Loop Mode (for GitHub Actions hourly trigger) ────────────────────────────
+
+LOOP_DURATION = int(os.getenv("LOOP_DURATION", "3300"))  # 55 minutes default
+
+
+def check_loop():
+    """Run price checks every 3 minutes for ~55 minutes, then exit."""
+    if not NTFY_TOPIC:
+        log.error("NTFY_TOPIC not set — please configure it first")
+        sys.exit(1)
+
+    log.info("=" * 60)
+    log.info("StubHub Price Monitor — Loop Mode")
+    log.info("Event: UFC London | Threshold: £%.2f", PRICE_THRESHOLD)
+    log.info("Will check every %ds for %d minutes", CHECK_INTERVAL, LOOP_DURATION // 60)
+    log.info("=" * 60)
+
+    start_time = time.time()
+    last_notified = None
+    check_count = 0
+
+    while time.time() - start_time < LOOP_DURATION and not _shutting_down:
+        check_count += 1
+        elapsed = int(time.time() - start_time)
+
+        try:
+            price, tier = get_lowest_price()
+
+            if price is not None:
+                if price <= PRICE_THRESHOLD:
+                    cooldown_remaining = 0
+                    if last_notified:
+                        cooldown_remaining = NOTIFICATION_COOLDOWN - (time.time() - last_notified)
+
+                    if cooldown_remaining <= 0:
+                        sent = send_notification(price)
+                        if sent:
+                            last_notified = time.time()
+                        log.info(
+                            "Check #%d [%dm] | Tier %s | £%.2f | ALERT SENT",
+                            check_count, elapsed // 60, tier, price,
+                        )
+                    else:
+                        log.info(
+                            "Check #%d [%dm] | Tier %s | £%.2f | Cooldown (%dm left)",
+                            check_count, elapsed // 60, tier, price,
+                            int(cooldown_remaining / 60),
+                        )
+                else:
+                    log.info(
+                        "Check #%d [%dm] | Tier %s | £%.2f | Above threshold",
+                        check_count, elapsed // 60, tier, price,
+                    )
+            else:
+                log.warning("Check #%d [%dm] | All tiers failed", check_count, elapsed // 60)
+
+        except Exception as e:
+            log.error("Check #%d [%dm] | Error: %s", check_count, elapsed // 60, e)
+
+        # Sleep until next check, but don't sleep past the loop duration
+        remaining = LOOP_DURATION - (time.time() - start_time)
+        if remaining > CHECK_INTERVAL:
+            time.sleep(CHECK_INTERVAL)
+        else:
+            break
+
+    log.info("Loop complete — %d checks in %d minutes", check_count, int((time.time() - start_time) / 60))
 
 
 # ── Main Loop (for local use) ────────────────────────────────────────────────
@@ -475,7 +544,9 @@ def main():
 
 
 if __name__ == "__main__":
-    if "--once" in sys.argv:
+    if "--loop" in sys.argv:
+        check_loop()
+    elif "--once" in sys.argv:
         check_once()
     else:
         main()
